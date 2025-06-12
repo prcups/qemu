@@ -66,6 +66,9 @@ config RX_ICU
 config LOONGSON_LIOINTC
     bool
 
+config LS2K_LIOINTC
+    bool
+
 config RISCV_ACLINT
     bool
 
@@ -91,6 +94,10 @@ config LOONGSON_IPI_COMMON
     bool
 
 config LOONGSON_IPI
+    bool
+    select LOONGSON_IPI_COMMON
+
+config LS2K_IPI
     bool
     select LOONGSON_IPI_COMMON
 
