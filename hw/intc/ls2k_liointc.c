@@ -188,18 +188,6 @@ static const Property ls2k_liointc_properties[] = {
     DEFINE_PROP_UINT32("num-cpu", LS2KLIOINTCState, num_cpu, 1),
 };
 
-static void ls2k_liointc_init(Object *obj)
-{
-    LS2KLIOINTCState *p = LS2K_LIOINTC(obj);
-
-    qdev_init_gpio_in(DEVICE(obj), irq_handler, 64);
-
-    memory_region_init_io(&p->mmio, obj, &pic_ops, p,
-                         TYPE_LS2K_LIOINTC, R_END);
-    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &p->mmio);
-}
-
-
 static void ls2k_liointc_realize(DeviceState *dev, Error **errp)
 {
     LS2KLIOINTCState *s = LS2K_LIOINTC(dev);
@@ -216,6 +204,11 @@ static void ls2k_liointc_realize(DeviceState *dev, Error **errp)
         error_setg(errp, "num-cpu must be at least 1");
         return;
     }
+
+    qdev_init_gpio_in(dev, irq_handler, 64);
+    memory_region_init_io(&s->mmio, OBJECT(dev), &pic_ops, s,
+                          TYPE_LS2K_LIOINTC, R_END);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mmio);
 
     s->parent_irq = g_new0(qemu_irq, s->num_cpu * NUM_IPS);
     s->parent_state = g_new0(bool, s->num_cpu * NUM_IPS);
@@ -252,7 +245,6 @@ static const TypeInfo ls2k_liointc_types[] = {
         .class_size = sizeof(LS2KLIOINTCClass),
         .class_init = ls2k_liointc_class_init,
         .instance_size = sizeof(LS2KLIOINTCState),
-        .instance_init = ls2k_liointc_init,
     }
 };
 
