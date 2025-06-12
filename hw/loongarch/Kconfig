@@ -24,3 +24,11 @@ config LOONGARCH_VIRT
     select DIMM
     select PFLASH_CFI01
     select ACPI_HMAT
+
+config LOONGARCH_2K1000
+    bool
+    default y
+    depends on LOONGARCH64 && FDT
+    select DEVICE_TREE
+    select LS2K_IPI
+    select LS2K_LIOINTC
