@@ -106,7 +106,7 @@ static bool trans_csrrd(DisasContext *ctx, arg_csrrd *a)
     TCGv dest;
     const CSRInfo *csr;
     GenCSRRead readfn;
-    tcg_target_long offset;
+    unsigned int offset;
 
     if (check_plv(ctx)) {
         return false;
@@ -122,7 +122,7 @@ static bool trans_csrrd(DisasContext *ctx, arg_csrrd *a)
         if (readfn) {
             readfn(dest, tcg_env);
         } else {
-            offset = get_csr_offset(csr, 0);
+            offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
             tcg_gen_ld_tl(dest, tcg_env, offset);
         }
     }
@@ -135,7 +135,7 @@ static bool trans_csrwr(DisasContext *ctx, arg_csrwr *a)
     TCGv dest, src1;
     const CSRInfo *csr;
     GenCSRWrite writefn;
-    tcg_target_long offset;
+    unsigned int offset;
 
     if (check_plv(ctx)) {
         return false;
@@ -157,7 +157,7 @@ static bool trans_csrwr(DisasContext *ctx, arg_csrwr *a)
         writefn(dest, tcg_env, src1);
     } else {
         dest = tcg_temp_new();
-        offset = get_csr_offset(csr, 0);
+        offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
         tcg_gen_ld_tl(dest, tcg_env, offset);
         tcg_gen_st_tl(src1, tcg_env, offset);
     }
@@ -170,7 +170,7 @@ static bool trans_csrxchg(DisasContext *ctx, arg_csrxchg *a)
     TCGv src1, mask, oldv, newv, temp;
     const CSRInfo *csr;
     GenCSRWrite writefn;
-    tcg_target_long offset;
+    unsigned int offset;
 
     if (check_plv(ctx)) {
         return false;
@@ -196,7 +196,7 @@ static bool trans_csrxchg(DisasContext *ctx, arg_csrxchg *a)
     newv = tcg_temp_new();
     temp = tcg_temp_new();
 
-    offset = get_csr_offset(csr, 0);
+    offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
     tcg_gen_ld_tl(oldv, tcg_env, offset);
     tcg_gen_and_tl(newv, src1, mask);
     tcg_gen_andc_tl(temp, oldv, mask);

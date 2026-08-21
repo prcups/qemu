@@ -55,7 +55,9 @@ static bool gen_rdtime(DisasContext *ctx, arg_rr *a,
         tcg_gen_sextract_tl(dst1, dst1, high ? 32 : 0, 32);
     }
 
-    offset = CPU_CSR_OFFSET(CSR_TID, 0);
+    offset = offsetof(CPULoongArchState,
+                      sys_states[LOONGARCH_VM_LEVEL_HOST]) +
+             CSR_OFFSET(CSR_TID);
     tcg_gen_ld_i64(dst2, tcg_env, offset);
 
     return true;

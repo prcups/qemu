@@ -783,7 +783,8 @@ static void loongarch_cpu_dump_csr(CPUState *cs, FILE *f)
             qemu_fprintf(f, " CSR%03d:", col);
         }
 
-        addr = (void *)env + get_csr_offset(csr_info, 0);
+        addr = (void *)env + get_csr_offset(csr_info,
+                                             LOONGARCH_VM_LEVEL_HOST);
         qemu_fprintf(f, " %s ", csr_info->name);
         len = strlen(csr_info->name);
         for (; len < 6; len++) {
