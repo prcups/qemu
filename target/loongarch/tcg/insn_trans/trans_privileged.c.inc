@@ -48,6 +48,7 @@ GEN_FALSE_TRANS(gtlbsrch)
 GEN_FALSE_TRANS(gtlbrd)
 GEN_FALSE_TRANS(gtlbwr)
 GEN_FALSE_TRANS(gtlbfill)
+GEN_FALSE_TRANS(hvcl)
 
 #else
 
@@ -348,6 +349,10 @@ static bool gen_iocsrrd(DisasContext *ctx, arg_rr *a,
     if (check_plv(ctx)) {
         return false;
     }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
     func(dest, tcg_env, src1);
     return true;
 }
@@ -360,6 +365,10 @@ static bool gen_iocsrwr(DisasContext *ctx, arg_rr *a,
 
     if (check_plv(ctx)) {
         return false;
+    }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
     }
     func(tcg_env, addr, val);
     return true;
@@ -629,6 +638,10 @@ static bool trans_dbcl(DisasContext *ctx, arg_dbcl *a)
     if (check_plv(ctx)) {
         return false;
     }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
     generate_exception(ctx, EXCCODE_DBP);
     return true;
 }
@@ -639,8 +652,29 @@ static bool trans_idle(DisasContext *ctx, arg_idle *a)
         return false;
     }
 
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
+
     tcg_gen_movi_tl(cpu_pc, ctx->base.pc_next + 4);
     gen_helper_idle(tcg_env);
+    ctx->base.is_jmp = DISAS_NORETURN;
+    return true;
+}
+
+static bool trans_hvcl(DisasContext *ctx, arg_hvcl *a)
+{
+    if (!avail_LVZ(ctx) || !ctx->guest_mode) {
+        return false;
+    }
+    if (ctx->plv != MMU_PLV_KERNEL) {
+        generate_exception(ctx, EXCCODE_IPE);
+        return true;
+    }
+
+    tcg_gen_movi_tl(cpu_pc, ctx->base.pc_next);
+    gen_helper_hvcl(tcg_env, tcg_constant_i32(a->imm));
     ctx->base.is_jmp = DISAS_NORETURN;
     return true;
 }
