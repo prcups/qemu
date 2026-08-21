@@ -74,7 +74,14 @@ target_ulong helper_csrrd_tval(CPULoongArchState *env)
 {
     LoongArchCPU *cpu = env_archcpu(env);
 
-    return cpu_loongarch_get_constant_timer_ticks(cpu);
+    return cpu_loongarch_get_constant_timer_ticks(cpu, false);
+}
+
+target_ulong helper_gcsrrd_tval(CPULoongArchState *env)
+{
+    LoongArchCPU *cpu = env_archcpu(env);
+
+    return cpu_loongarch_get_constant_timer_ticks(cpu, true);
 }
 
 target_ulong helper_csrrd_msgir(CPULoongArchState *env)
@@ -129,7 +136,18 @@ target_ulong helper_csrwr_tcfg(CPULoongArchState *env, target_ulong val)
     CPUSysState *sys = env_sys(env);
     int64_t old_v = sys->CSR_TCFG;
 
-    cpu_loongarch_store_constant_timer_config(cpu, val);
+    cpu_loongarch_store_constant_timer_config(cpu, val, false);
+
+    return old_v;
+}
+
+target_ulong helper_gcsrwr_tcfg(CPULoongArchState *env, target_ulong val)
+{
+    LoongArchCPU *cpu = env_archcpu(env);
+    CPUSysState *guest = &env->sys_states[LOONGARCH_VM_LEVEL_GUEST];
+    int64_t old_v = guest->CSR_TCFG;
+
+    cpu_loongarch_store_constant_timer_config(cpu, val, true);
 
     return old_v;
 }
