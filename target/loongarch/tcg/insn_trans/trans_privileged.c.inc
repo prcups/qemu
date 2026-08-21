@@ -39,6 +39,9 @@ GEN_FALSE_TRANS(lddir)
 GEN_FALSE_TRANS(ertn)
 GEN_FALSE_TRANS(dbcl)
 GEN_FALSE_TRANS(idle)
+GEN_FALSE_TRANS(gcsrrd)
+GEN_FALSE_TRANS(gcsrwr)
+GEN_FALSE_TRANS(gcsrxchg)
 
 #else
 
@@ -54,8 +57,8 @@ static bool check_plv(DisasContext *ctx)
     return false;
 }
 
-static bool set_csr_trans_func(unsigned int csr_num, GenCSRRead readfn,
-                               GenCSRWrite writefn)
+static bool set_csr_trans_func(unsigned int csr_num, int vm_level,
+                               GenCSRRead readfn, GenCSRWrite writefn)
 {
     CSRInfo *csr;
 
@@ -64,13 +67,17 @@ static bool set_csr_trans_func(unsigned int csr_num, GenCSRRead readfn,
         return false;
     }
 
-    csr->readfn = (GenCSRFunc)readfn;
-    csr->writefn = (GenCSRFunc)writefn;
+    csr->readfn[vm_level] = (GenCSRFunc)readfn;
+    csr->writefn[vm_level] = (GenCSRFunc)writefn;
     return true;
 }
 
 #define SET_CSR_FUNC(NAME, read, write)                 \
-        set_csr_trans_func(LOONGARCH_CSR_##NAME, read, write)
+        set_csr_trans_func(LOONGARCH_CSR_##NAME,        \
+                           LOONGARCH_VM_LEVEL_HOST, read, write)
+#define SET_GCSR_FUNC(NAME, read, write)                \
+        set_csr_trans_func(LOONGARCH_CSR_##NAME,        \
+                           LOONGARCH_VM_LEVEL_GUEST, read, write)
 
 void loongarch_csr_translate_init(void)
 {
@@ -85,12 +92,29 @@ void loongarch_csr_translate_init(void)
     SET_CSR_FUNC(TVAL,  gen_helper_csrrd_tval, NULL);
     SET_CSR_FUNC(TICLR, NULL, gen_helper_csrwr_ticlr);
     SET_CSR_FUNC(MSGIR, gen_helper_csrrd_msgir, NULL);
+    SET_CSR_FUNC(GSTAT, NULL, gen_helper_csrwr_gstat);
+    SET_CSR_FUNC(GTLBC, NULL, gen_helper_csrwr_gtlbc);
+    SET_CSR_FUNC(GINTC, NULL, gen_helper_csrwr_gintc);
+
+    SET_GCSR_FUNC(ESTAT, NULL, gen_helper_gcsrwr_estat);
+    SET_GCSR_FUNC(ASID, NULL, gen_helper_gcsrwr_asid);
+    SET_GCSR_FUNC(PGD, gen_helper_gcsrrd_pgd, NULL);
+    SET_GCSR_FUNC(TCFG, NULL, gen_helper_gcsrwr_tcfg);
+    SET_GCSR_FUNC(TVAL, gen_helper_gcsrrd_tval, NULL);
+    SET_GCSR_FUNC(TICLR, NULL, gen_helper_gcsrwr_ticlr);
 }
 #undef SET_CSR_FUNC
+#undef SET_GCSR_FUNC
 
-static bool check_csr_flags(DisasContext *ctx, const CSRInfo *csr, bool write)
+static bool check_csr_flags(DisasContext *ctx, const CSRInfo *csr,
+                            int vm_level, bool write)
 {
-    if ((csr->flags & CSRFL_READONLY) && write) {
+    if (vm_level == LOONGARCH_VM_LEVEL_HOST &&
+        (csr->flags & CSRFL_READONLY) && write) {
+        return false;
+    }
+    if (vm_level == LOONGARCH_VM_LEVEL_GUEST && ctx->guest_mode &&
+        (csr->flags & CSRFL_GUEST_READONLY) && write) {
         return false;
     }
     if ((csr->flags & CSRFL_IO) && translator_io_start(&ctx->base)) {
@@ -101,115 +125,212 @@ static bool check_csr_flags(DisasContext *ctx, const CSRInfo *csr, bool write)
     return true;
 }
 
-static bool trans_csrrd(DisasContext *ctx, arg_csrrd *a)
+static const CSRInfo *get_csr_for_level(unsigned int csr_num, int vm_level)
+{
+    const CSRInfo *csr = get_csr(csr_num);
+
+    if (csr && vm_level == LOONGARCH_VM_LEVEL_GUEST &&
+        (csr->flags & CSRFL_GUEST_INVALID)) {
+        return NULL;
+    }
+    return csr;
+}
+
+static bool trans_csrrd_impl(DisasContext *ctx, int rd, unsigned int csr_num,
+                             int vm_level)
 {
     TCGv dest;
     const CSRInfo *csr;
     GenCSRRead readfn;
-    unsigned int offset;
 
-    if (check_plv(ctx)) {
-        return false;
-    }
-    csr = get_csr(a->csr);
+    csr = get_csr_for_level(csr_num, vm_level);
     if (csr == NULL) {
         /* CSR is undefined: read as 0. */
         dest = tcg_constant_tl(0);
     } else {
-        check_csr_flags(ctx, csr, false);
-        dest = gpr_dst(ctx, a->rd, EXT_NONE);
-        readfn = (GenCSRRead)csr->readfn;
-        if (readfn) {
-            readfn(dest, tcg_env);
+        check_csr_flags(ctx, csr, vm_level, false);
+        if (vm_level == LOONGARCH_VM_LEVEL_GUEST &&
+            (csr->flags & CSRFL_GSPR)) {
+            if (ctx->guest_mode) {
+                generate_exception(ctx, EXCCODE_GSPR);
+                return true;
+            }
+            dest = tcg_constant_tl(0);
         } else {
-            offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
-            tcg_gen_ld_tl(dest, tcg_env, offset);
+            dest = gpr_dst(ctx, rd, EXT_NONE);
+            readfn = (GenCSRRead)csr->readfn[vm_level];
+            if (readfn) {
+                readfn(dest, tcg_env);
+            } else {
+                tcg_gen_ld_tl(dest, tcg_env,
+                              get_csr_offset(csr, vm_level));
+            }
         }
     }
-    gen_set_gpr(a->rd, dest, EXT_NONE);
+    gen_set_gpr(rd, dest, EXT_NONE);
     return true;
 }
 
-static bool trans_csrwr(DisasContext *ctx, arg_csrwr *a)
+static bool trans_csrwr_impl(DisasContext *ctx, int rd, unsigned int csr_num,
+                             int vm_level)
 {
     TCGv dest, src1;
     const CSRInfo *csr;
     GenCSRWrite writefn;
     unsigned int offset;
 
-    if (check_plv(ctx)) {
-        return false;
-    }
-    csr = get_csr(a->csr);
+    csr = get_csr_for_level(csr_num, vm_level);
     if (csr == NULL) {
         /* CSR is undefined: write ignored, read old_value as 0. */
-        gen_set_gpr(a->rd, tcg_constant_tl(0), EXT_NONE);
+        gen_set_gpr(rd, tcg_constant_tl(0), EXT_NONE);
         return true;
     }
-    if (!check_csr_flags(ctx, csr, true)) {
+    if (vm_level == LOONGARCH_VM_LEVEL_GUEST &&
+        (csr->flags & CSRFL_GSPR)) {
+        if (ctx->guest_mode) {
+            generate_exception(ctx, EXCCODE_GSPR);
+        } else {
+            gen_set_gpr(rd, tcg_constant_tl(0), EXT_NONE);
+        }
+        return true;
+    }
+    if (!check_csr_flags(ctx, csr, vm_level, true)) {
         /* CSR is readonly: trap. */
         return false;
     }
-    src1 = gpr_src(ctx, a->rd, EXT_NONE);
-    writefn = (GenCSRWrite)csr->writefn;
+    src1 = gpr_src(ctx, rd, EXT_NONE);
+    writefn = (GenCSRWrite)csr->writefn[vm_level];
     if (writefn) {
-        dest = gpr_dst(ctx, a->rd, EXT_NONE);
+        dest = gpr_dst(ctx, rd, EXT_NONE);
         writefn(dest, tcg_env, src1);
     } else {
         dest = tcg_temp_new();
-        offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
+        offset = get_csr_offset(csr, vm_level);
         tcg_gen_ld_tl(dest, tcg_env, offset);
         tcg_gen_st_tl(src1, tcg_env, offset);
     }
-    gen_set_gpr(a->rd, dest, EXT_NONE);
+    gen_set_gpr(rd, dest, EXT_NONE);
     return true;
 }
 
-static bool trans_csrxchg(DisasContext *ctx, arg_csrxchg *a)
+static bool trans_csrxchg_impl(DisasContext *ctx, int rd, int rj,
+                               unsigned int csr_num, int vm_level)
 {
     TCGv src1, mask, oldv, newv, temp;
     const CSRInfo *csr;
     GenCSRWrite writefn;
     unsigned int offset;
 
-    if (check_plv(ctx)) {
-        return false;
-    }
-    csr = get_csr(a->csr);
+    csr = get_csr_for_level(csr_num, vm_level);
     if (csr == NULL) {
         /* CSR is undefined: write ignored, read old_value as 0. */
-        gen_set_gpr(a->rd, tcg_constant_tl(0), EXT_NONE);
+        gen_set_gpr(rd, tcg_constant_tl(0), EXT_NONE);
+        return true;
+    }
+    if (vm_level == LOONGARCH_VM_LEVEL_GUEST &&
+        (csr->flags & CSRFL_GSPR)) {
+        if (ctx->guest_mode) {
+            generate_exception(ctx, EXCCODE_GSPR);
+        } else {
+            gen_set_gpr(rd, tcg_constant_tl(0), EXT_NONE);
+        }
         return true;
     }
 
-    if (!check_csr_flags(ctx, csr, true)) {
+    if (!check_csr_flags(ctx, csr, vm_level, true)) {
         /* CSR is readonly: trap. */
         return false;
     }
 
-    /* So far only readonly csrs have readfn. */
-    assert(csr->readfn == NULL);
-
-    src1 = gpr_src(ctx, a->rd, EXT_NONE);
-    mask = gpr_src(ctx, a->rj, EXT_NONE);
+    src1 = gpr_src(ctx, rd, EXT_NONE);
+    mask = gpr_src(ctx, rj, EXT_NONE);
     oldv = tcg_temp_new();
     newv = tcg_temp_new();
     temp = tcg_temp_new();
+    offset = get_csr_offset(csr, vm_level);
 
-    offset = get_csr_offset(csr, LOONGARCH_VM_LEVEL_HOST);
-    tcg_gen_ld_tl(oldv, tcg_env, offset);
+    if (csr->readfn[vm_level]) {
+        GenCSRRead readfn = (GenCSRRead)csr->readfn[vm_level];
+        readfn(oldv, tcg_env);
+    } else {
+        tcg_gen_ld_tl(oldv, tcg_env, offset);
+    }
     tcg_gen_and_tl(newv, src1, mask);
     tcg_gen_andc_tl(temp, oldv, mask);
     tcg_gen_or_tl(newv, newv, temp);
 
-    writefn = (GenCSRWrite)csr->writefn;
+    writefn = (GenCSRWrite)csr->writefn[vm_level];
     if (writefn) {
         writefn(oldv, tcg_env, newv);
     } else {
         tcg_gen_st_tl(newv, tcg_env, offset);
     }
-    gen_set_gpr(a->rd, oldv, EXT_NONE);
+    gen_set_gpr(rd, oldv, EXT_NONE);
     return true;
+}
+
+static bool trans_csrrd(DisasContext *ctx, arg_csrrd *a)
+{
+    if (check_plv(ctx)) {
+        return false;
+    }
+    return trans_csrrd_impl(ctx, a->rd, a->csr, ctx->guest_mode);
+}
+
+static bool trans_csrwr(DisasContext *ctx, arg_csrwr *a)
+{
+    if (check_plv(ctx)) {
+        return false;
+    }
+    return trans_csrwr_impl(ctx, a->rd, a->csr, ctx->guest_mode);
+}
+
+static bool trans_csrxchg(DisasContext *ctx, arg_csrxchg *a)
+{
+    if (check_plv(ctx)) {
+        return false;
+    }
+    return trans_csrxchg_impl(ctx, a->rd, a->rj, a->csr,
+                              ctx->guest_mode);
+}
+
+static bool trans_gcsrrd(DisasContext *ctx, arg_gcsrrd *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx)) {
+        return false;
+    }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
+    return trans_csrrd_impl(ctx, a->rd, a->csr,
+                            LOONGARCH_VM_LEVEL_GUEST);
+}
+
+static bool trans_gcsrwr(DisasContext *ctx, arg_gcsrwr *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx)) {
+        return false;
+    }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
+    return trans_csrwr_impl(ctx, a->rd, a->csr,
+                            LOONGARCH_VM_LEVEL_GUEST);
+}
+
+static bool trans_gcsrxchg(DisasContext *ctx, arg_gcsrxchg *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx)) {
+        return false;
+    }
+    if (ctx->guest_mode) {
+        generate_exception(ctx, EXCCODE_GSPR);
+        return true;
+    }
+    return trans_csrxchg_impl(ctx, a->rd, a->rj, a->csr,
+                              LOONGARCH_VM_LEVEL_GUEST);
 }
 
 static bool gen_iocsrrd(DisasContext *ctx, arg_rr *a,
@@ -249,7 +370,7 @@ TRANS64(iocsrwr_d, IOCSR, gen_iocsrwr, gen_helper_iocsrwr_d)
 
 static void check_mmu_idx(DisasContext *ctx)
 {
-    if (ctx->mem_idx != MMU_DA_IDX) {
+    if (ctx->mem_idx != MMU_DA_IDX && ctx->mem_idx != MMU_GUEST_DA_IDX) {
         tcg_gen_movi_tl(cpu_pc, ctx->base.pc_next + 4);
         ctx->base.is_jmp = DISAS_EXIT;
     }

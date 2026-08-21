@@ -10,7 +10,9 @@
     [LOONGARCH_CSR_##NAME] = {                             \
         .name   = (stringify(NAME)),                       \
         .offset = CSR_OFFSET(CSR_##NAME),                  \
-        .flags = FL, .readfn = RD, .writefn = WR           \
+        .flags = FL,                                       \
+        .readfn[LOONGARCH_VM_LEVEL_HOST] = RD,             \
+        .writefn[LOONGARCH_VM_LEVEL_HOST] = WR             \
     }
 
 #define CSR_OFF_ARRAY(NAME, N)                                \

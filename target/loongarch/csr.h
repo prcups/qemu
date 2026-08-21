@@ -26,8 +26,8 @@ typedef struct {
     const char *name;
     int offset;
     int flags;
-    GenCSRFunc readfn;
-    GenCSRFunc writefn;
+    GenCSRFunc readfn[LOONGARCH_VM_LEVELS];
+    GenCSRFunc writefn[LOONGARCH_VM_LEVELS];
 } CSRInfo;
 
 CSRInfo *get_csr(unsigned int csr_num);
