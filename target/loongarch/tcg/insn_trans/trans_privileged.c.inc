@@ -42,6 +42,12 @@ GEN_FALSE_TRANS(idle)
 GEN_FALSE_TRANS(gcsrrd)
 GEN_FALSE_TRANS(gcsrwr)
 GEN_FALSE_TRANS(gcsrxchg)
+GEN_FALSE_TRANS(gtlbclr)
+GEN_FALSE_TRANS(gtlbflush)
+GEN_FALSE_TRANS(gtlbsrch)
+GEN_FALSE_TRANS(gtlbrd)
+GEN_FALSE_TRANS(gtlbwr)
+GEN_FALSE_TRANS(gtlbfill)
 
 #else
 
@@ -394,12 +400,40 @@ static bool trans_tlbrd(DisasContext *ctx, arg_tlbrd *a)
     return true;
 }
 
+static bool trans_gtlbsrch(DisasContext *ctx, arg_gtlbsrch *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbsrch(tcg_env);
+    return true;
+}
+
+static bool trans_gtlbrd(DisasContext *ctx, arg_gtlbrd *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbrd(tcg_env);
+    return true;
+}
+
 static bool trans_tlbwr(DisasContext *ctx, arg_tlbwr *a)
 {
     if (check_plv(ctx)) {
         return false;
     }
     gen_helper_tlbwr(tcg_env);
+    check_mmu_idx(ctx);
+    return true;
+}
+
+static bool trans_gtlbwr(DisasContext *ctx, arg_gtlbwr *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbwr(tcg_env);
     check_mmu_idx(ctx);
     return true;
 }
@@ -414,6 +448,16 @@ static bool trans_tlbfill(DisasContext *ctx, arg_tlbfill *a)
     return true;
 }
 
+static bool trans_gtlbfill(DisasContext *ctx, arg_gtlbfill *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbfill(tcg_env);
+    check_mmu_idx(ctx);
+    return true;
+}
+
 static bool trans_tlbclr(DisasContext *ctx, arg_tlbclr *a)
 {
     if (check_plv(ctx)) {
@@ -424,12 +468,32 @@ static bool trans_tlbclr(DisasContext *ctx, arg_tlbclr *a)
     return true;
 }
 
+static bool trans_gtlbclr(DisasContext *ctx, arg_gtlbclr *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbclr(tcg_env);
+    check_mmu_idx(ctx);
+    return true;
+}
+
 static bool trans_tlbflush(DisasContext *ctx, arg_tlbflush *a)
 {
     if (check_plv(ctx)) {
         return false;
     }
     gen_helper_tlbflush(tcg_env);
+    check_mmu_idx(ctx);
+    return true;
+}
+
+static bool trans_gtlbflush(DisasContext *ctx, arg_gtlbflush *a)
+{
+    if (check_plv(ctx) || !avail_LVZ(ctx) || ctx->guest_mode) {
+        return false;
+    }
+    gen_helper_gtlbflush(tcg_env);
     check_mmu_idx(ctx);
     return true;
 }
