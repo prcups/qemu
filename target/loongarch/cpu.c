@@ -62,7 +62,7 @@ void loongarch_cpu_set_irq(void *opaque, int irq, int level)
     LoongArchCPU *cpu = opaque;
     CPULoongArchState *env = &cpu->env;
     CPUState *cs = CPU(cpu);
-    CPUSysState *sys = env_sys(env);
+    CPUSysState *host = &env->sys_states[LOONGARCH_VM_LEVEL_HOST];
 
     if (irq < 0 || irq >= N_IRQS) {
         return;
@@ -71,11 +71,38 @@ void loongarch_cpu_set_irq(void *opaque, int irq, int level)
     if (kvm_enabled()) {
         kvm_loongarch_set_interrupt(cpu, irq, level);
     } else if (tcg_enabled()) {
-        sys->CSR_ESTAT = deposit64(sys->CSR_ESTAT, irq, 1, level != 0);
-        if (FIELD_EX64(sys->CSR_ESTAT, CSR_ESTAT, IS)) {
+        host->CSR_ESTAT = deposit64(host->CSR_ESTAT, irq, 1, level != 0);
+        if (irq >= 2 && irq < 10 &&
+            (FIELD_EX64(host->CSR_GINTC, CSR_GINTC, HWIP) &
+             BIT(irq - 2))) {
+            loongarch_cpu_set_irq_guest(opaque, irq, level);
+        }
+        if (FIELD_EX64(host->CSR_ESTAT, CSR_ESTAT, IS) &
+            ~(FIELD_EX64(host->CSR_GINTC, CSR_GINTC, HWIP) << 2)) {
             cpu_interrupt(cs, CPU_INTERRUPT_HARD);
         } else {
             cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+        }
+    }
+}
+
+void loongarch_cpu_set_irq_guest(void *opaque, int irq, int level)
+{
+    LoongArchCPU *cpu = opaque;
+    CPULoongArchState *env = &cpu->env;
+    CPUState *cs = CPU(cpu);
+    CPUSysState *guest = &env->sys_states[LOONGARCH_VM_LEVEL_GUEST];
+
+    if (irq < 0 || irq >= N_IRQS) {
+        return;
+    }
+
+    guest->CSR_ESTAT = deposit64(guest->CSR_ESTAT, irq, 1, level != 0);
+    if (env_vm_level(env) == LOONGARCH_VM_LEVEL_GUEST) {
+        if (FIELD_EX64(guest->CSR_ESTAT, CSR_ESTAT, IS)) {
+            cpu_interrupt(cs, CPU_INTERRUPT_GUEST);
+        } else {
+            cpu_reset_interrupt(cs, CPU_INTERRUPT_GUEST);
         }
     }
 }
@@ -85,12 +112,40 @@ bool cpu_loongarch_hw_interrupts_pending(CPULoongArchState *env)
 {
     uint32_t pending;
     uint32_t status;
-    CPUSysState *sys = env_sys(env);
+    CPUSysState *host = &env->sys_states[LOONGARCH_VM_LEVEL_HOST];
 
-    pending = FIELD_EX64(sys->CSR_ESTAT, CSR_ESTAT, IS);
-    status  = FIELD_EX64(sys->CSR_ECFG, CSR_ECFG, LIE);
+    pending = FIELD_EX64(host->CSR_ESTAT, CSR_ESTAT, IS);
+    status  = FIELD_EX64(host->CSR_ECFG, CSR_ECFG, LIE);
+    pending &= ~(FIELD_EX64(host->CSR_GINTC, CSR_GINTC, HWIP) << 2);
 
     return (pending & status) != 0;
+}
+
+static inline bool cpu_loongarch_hw_interrupts_enabled_guest(
+    CPULoongArchState *env)
+{
+    return FIELD_EX64(env->sys_states[LOONGARCH_VM_LEVEL_GUEST].CSR_CRMD,
+                      CSR_CRMD, IE);
+}
+
+static inline bool cpu_loongarch_hw_interrupts_pending_guest(
+    CPULoongArchState *env)
+{
+    uint32_t pending;
+    uint32_t status;
+    CPUSysState *guest = &env->sys_states[LOONGARCH_VM_LEVEL_GUEST];
+
+    pending = FIELD_EX64(guest->CSR_ESTAT, CSR_ESTAT, IS);
+    status = FIELD_EX64(guest->CSR_ECFG, CSR_ECFG, LIE);
+
+    return (pending & status) != 0;
+}
+
+bool loongarch_guest_has_interrupt(CPULoongArchState *env)
+{
+    return env_vm_level(env) == LOONGARCH_VM_LEVEL_GUEST &&
+           cpu_loongarch_hw_interrupts_enabled_guest(env) &&
+           cpu_loongarch_hw_interrupts_pending_guest(env);
 }
 #endif
 
@@ -101,6 +156,11 @@ bool loongarch_cpu_has_work(CPUState *cs)
 
     if (cpu_test_interrupt(cs, CPU_INTERRUPT_HARD) &&
         cpu_loongarch_hw_interrupts_pending(cpu_env(cs))) {
+        has_work = true;
+    }
+
+    if (cpu_test_interrupt(cs, CPU_INTERRUPT_GUEST) &&
+        loongarch_guest_has_interrupt(cpu_env(cs))) {
         has_work = true;
     }
 
