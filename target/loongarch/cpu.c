@@ -168,6 +168,56 @@ bool loongarch_cpu_has_work(CPUState *cs)
 }
 #endif /* !CONFIG_USER_ONLY */
 
+uint8_t get_tgid(CPULoongArchState *env)
+{
+    CPUSysState *host = &env->sys_states[LOONGARCH_VM_LEVEL_HOST];
+
+    if (env_vm_level(env) == LOONGARCH_VM_LEVEL_GUEST) {
+        return get_gid(env);
+    }
+
+    if (FIELD_EX64(host->CSR_GTLBC, CSR_GTLBC, USETGID)) {
+        return FIELD_EX64(host->CSR_GTLBC, CSR_GTLBC, TGID);
+    } else if (will_return_to_guest(env)) {
+        return get_gid(env);
+    }
+    return 0;
+}
+
+bool will_return_to_guest(CPULoongArchState *env)
+{
+    if (!has_lvz_capability(env) ||
+        env_vm_level(env) == LOONGARCH_VM_LEVEL_GUEST) {
+        return false;
+    }
+    return FIELD_EX64(env->sys_states[LOONGARCH_VM_LEVEL_HOST].CSR_GSTAT,
+                      CSR_GSTAT, PVM);
+}
+
+bool has_lvz_capability(CPULoongArchState *env)
+{
+    return FIELD_EX32(env->cpucfg[2], CPUCFG2, LVZ);
+}
+
+uint8_t get_gid(CPULoongArchState *env)
+{
+    return FIELD_EX64(env->sys_states[LOONGARCH_VM_LEVEL_HOST].CSR_GSTAT,
+                      CSR_GSTAT, GID);
+}
+
+void trigger_vm_exit(CPULoongArchState *env)
+{
+    CPUSysState *host = &env->sys_states[LOONGARCH_VM_LEVEL_HOST];
+
+    if (env_vm_level(env) != LOONGARCH_VM_LEVEL_GUEST) {
+        return;
+    }
+
+    cpu_loongarch_set_guest_timer(env_archcpu(env), false);
+    host->CSR_GSTAT = FIELD_DP64(host->CSR_GSTAT, CSR_GSTAT, PVM, 1);
+    env->vm_exit = true;
+}
+
 static void loongarch_la464_init_csr(DeviceState *dev)
 {
 #ifndef CONFIG_USER_ONLY
